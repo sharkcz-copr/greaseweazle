@@ -1,5 +1,5 @@
 Name:           greaseweazle
-Version:        1.22
+Version:        1.23
 Release:        1%{?dist}
 Summary:        Host tools for controlling a Greaseweazle USB device
 
@@ -46,5 +46,8 @@ install -D -p -m 644 scripts/49-greaseweazle.rules %{buildroot}/%{_udevrulesdir}
 
 
 %changelog
+* Thu Jun 25 2026 Dan Horák <dan[at]danny.cz> - 1.23-1
+- updated to 1.23
+
 * Sun Jul 27 2025 Dan Horák <dan[at]danny.cz> - 1.22-1
 - initial Fedora version
