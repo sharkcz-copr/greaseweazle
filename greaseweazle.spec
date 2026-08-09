@@ -1,11 +1,13 @@
 Name:           greaseweazle
 Version:        1.23
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Host tools for controlling a Greaseweazle USB device
 
 License:        Unlicense
 URL:            https://github.com/keirf/greaseweazle
 Source:         %{url}/releases/download/v%{version}/%{name}-%{version}.zip
+# https://github.com/misterblack1/greaseweazle
+Patch0:         %{name}-diag.patch
 
 BuildRequires:  gcc
 BuildRequires:  python3-devel
@@ -46,6 +48,9 @@ install -D -p -m 644 scripts/49-greaseweazle.rules %{buildroot}/%{_udevrulesdir}
 
 
 %changelog
+* Sun Aug 09 2026 Dan Horák <dan[at]danny.cz> - 1.23-2
+- add diag tool from https://github.com/misterblack1/greaseweazle
+
 * Thu Jun 25 2026 Dan Horák <dan[at]danny.cz> - 1.23-1
 - updated to 1.23
 

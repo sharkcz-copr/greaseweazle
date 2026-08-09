@@ -1,0 +1,1212 @@
+diff --git a/gw-diag.bat b/gw-diag.bat
+new file mode 100644
+index 0000000..cd2a8c0
+--- /dev/null
++++ b/gw-diag.bat
+@@ -0,0 +1,194 @@
++@echo off
++setlocal
++
++rem This batch file lives in the root of the greaseweazle fork and runs the
++rem gw diag tool straight from the source tree next to it.
++set "ROOT=%~dp0"
++if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
++
++rem Always show which commit this copy is at, first thing, before anything
++rem else can go wrong or print help and exit -- so a copied/synced tree
++rem never leaves you guessing which version you're actually running.
++where git >nul 2>nul
++if not errorlevel 1 (
++    for /f "delims=" %%v in ('git -C "%ROOT%" log -1 --format^="%%h %%ci %%s" 2^>nul') do echo gw-diag: %%v
++    if errorlevel 1 echo gw-diag: ^(not a git checkout -- can't identify commit^)
++) else (
++    echo gw-diag: ^(git not on PATH -- can't identify commit^)
++)
++
++if "%~1"=="" goto :usage
++if /I "%~1"=="/?" goto :usage
++if /I "%~1"=="/h" goto :usage
++
++if not exist "%ROOT%\scripts\win\gw.py" (
++    echo ERROR: gw-diag.bat must sit in the root of the greaseweazle fork,
++    echo next to the scripts\ and src\ folders. "%ROOT%\scripts\win\gw.py"
++    echo was not found.
++    exit /b 1
++)
++
++call :check_python
++if errorlevel 1 exit /b 1
++
++call :check_deps
++if errorlevel 1 exit /b 1
++
++rem src\greaseweazle\__init__.py is gitignored and only gets written by a
++rem real build/version step. "make mypy" overwrites it with a type-stub-only
++rem line that breaks "from greaseweazle import __version__" at runtime, so
++rem always rewrite a working one here before running. No "+" in the string --
++rem cli.py prints a "TEST/PRE-RELEASE" banner whenever one is present.
++> "%ROOT%\src\greaseweazle\__init__.py" echo __version__ = '0.1.dev0local'
++
++set "PYTHONPATH=%ROOT%\src"
++set "GW_OPT=n"
++
++pushd "%ROOT%"
++python scripts\win\gw.py diag %*
++set "RC=%ERRORLEVEL%"
++popd
++
++endlocal & exit /b %RC%
++
++:check_python
++where python >nul 2>nul
++if errorlevel 1 (
++    echo ERROR: Python was not found on your PATH.
++    echo.
++    echo gw-diag.bat needs Python 3.8 or newer. Install it from
++    echo https://www.python.org/downloads/ and check "Add Python to PATH"
++    echo during setup, then try again.
++    exit /b 1
++)
++python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>nul
++if errorlevel 1 (
++    echo ERROR: Python 3.8 or newer is required.
++    python --version
++    echo.
++    echo Install a newer Python from https://www.python.org/downloads/ and
++    echo try again.
++    exit /b 1
++)
++exit /b 0
++
++:check_deps
++python -c "import crcmod, bitarray, serial, requests" >nul 2>nul
++if not errorlevel 1 exit /b 0
++echo First-time setup: installing the required Python packages
++echo (crcmod, bitarray, pyserial, requests)...
++echo.
++python -m pip install crcmod "bitarray>=3" pyserial requests
++if errorlevel 1 (
++    echo.
++    echo ERROR: automatic install failed. Install the packages by hand with:
++    echo   python -m pip install crcmod "bitarray^>=3" pyserial requests
++    exit /b 1
++)
++echo.
++exit /b 0
++
++:usage
++echo.
++echo gw-diag.bat - run the gw diag tool straight from source, no build or
++echo               install needed. Handy on Windows machines that don't have
++echo               the MSVC C++ Build Tools required to compile a full pipx
++echo               install. Just clone the fork and run this file.
++echo.
++echo Needs Python 3.8 or newer on your PATH. The required Python packages
++echo (crcmod, bitarray^>=3, pyserial, requests) are installed automatically
++echo on first run.
++echo.
++echo USAGE:
++echo   gw-diag.bat --rate KBPS [other options]
++echo.
++echo PARAMETERS:
++echo   --device NAME    Serial port name, such as COM3. Optional, only needed
++echo                     if the Greaseweazle isn't auto-detected or you have
++echo                     more than one plugged in.
++echo   --drive ID       Which physical drive to use. A or B for an IBM/PC
++echo                     cable, 0-3 for a Shugart cable. Default: A.
++echo   --cyls N         Number of cylinders the drive has. Default: 84. You
++echo                     can still step past this to probe a drive's real
++echo                     mechanical limit. It's just the default range.
++echo   --heads N        Number of heads/sides: 1 or 2. Default: 2.
++echo   --double-step    Step two physical cylinders per logical track, for
++echo                     an 80-track drive reading a 40-track disk.
++echo   --step-delay N   Step Delay in microseconds for this session only
++echo                     (same units as "gw delays --step"). Optional --
++echo                     without it, diag preserves whatever "gw delays"
++echo                     already has set, instead of reverting to the
++echo                     firmware default the way it used to.
++echo   --encoding TYPE  mfm or fm. Default: mfm. Almost everything from the
++echo                     PC, Amiga and Atari ST era is mfm. Old 8-inch or
++echo                     single-density disks are fm.
++echo   --rate KBPS      Data rate in kilobits per second. Required. Common
++echo                     values: 250 for double density, 500 for high
++echo                     density. Rate alone doesn't fully determine the
++echo                     format (500kbps is both 1.2MB 5.25" HD and 1.44MB
++echo                     3.5" HD, at different rpm), so this is the one
++echo                     value you must always supply yourself.
++echo   --secs N         Sectors expected per track. Optional: left out, the
++echo                     tool guesses it from --rate and the measured rpm
++echo                     for standard formats. Set it yourself for a
++echo                     nonstandard or copy-protected disk.
++echo   --rpm N          Force a fixed spindle speed instead of using the
++echo                     live measurement. Optional, normally leave this
++echo                     out.
++echo   --gen-tg43       Auto-drive pin 2 as a TG43 signal for 8-inch
++echo                     drives: high below track 60, low from track 60
++echo                     up (matches --gen-tg43 in gw read/write/align).
++echo                     Updated automatically on every seek. Disables
++echo                     the d key while active, since pin 2 is then
++echo                     under automatic control, not manual toggle.
++echo.
++echo OUTPUT LINE FORMAT:
++echo   Drive A: T0, H0, RPM 297.53, S9/9, OT NO, SEL:ON, MOT:ON,
++echo   WP:H Unprot, TK0:L ON, DEN 2:L, DC34:?
++echo.
++echo   Drive       Drive ID you selected.
++echo   T           Current track/cylinder number.
++echo   H           Current head/side.
++echo   RPM         Measured spindle speed this update. Green if within 5rpm
++echo               of a standard speed (300 or 360), red otherwise, only
++echo               once there's an actual reading. Shows ERR if no disk or
++echo               index signal was found, or "off" if you turned the
++echo               motor off with the m key.
++echo   S           Sectors read cleanly from the current track, out of how
++echo               many were expected (from --secs, or the guess).
++echo   OT          Off-track sectors: sectors that decoded fine but whose
++echo               header said a different track than where the head
++echo               actually is. Shows NO if there aren't any. Otherwise
++echo               shows which track(s) they actually came from, as
++echo               T^<cyl^>/S^<count^>, for example T11/S2 means 2 sectors read
++echo               cleanly but tagged as track 11 while the head is on a
++echo               different track. More than one wrong track in the same
++echo               read shows as a comma list, such as T11/S2,T12/S1. Any
++echo               non-NO value usually means the head is mistracking or
++echo               stepping to the wrong place.
++echo   SEL         Drive-select line: ON while selected, OFF after the s
++echo               key deselects it. Independent of MOT -- some drives
++echo               gate their head load/unload solenoid off drive-select
++echo               rather than motor-on, so this lets you test that
++echo               without also stopping the spindle.
++echo   MOT         Motor-on line: ON while the motor is running, OFF
++echo               after the m key turns it off.
++echo   WP          Write-protect pin (28), shown as the raw H/L level plus
++echo               whether that means Prot or Unprot on this drive.
++echo   TK0         Track-0 sensor pin (26): raw H/L level plus ON when the
++echo               head is at track 0 (L), OFF otherwise (H).
++echo   DEN 2       Density-select output pin (2) and the level you've set
++echo               it to with the d key. Note: pin 2 isn't always density
++echo               select. On 8-inch drives, and on most 34-to-50-pin
++echo               adapter cables, the same pin is commonly wired as TG43
++echo               instead (write precompensation enable past a given
++echo               cylinder). The d key just toggles the raw pin either
++echo               way. Use --gen-tg43 instead if you want it driven
++echo               automatically by cylinder rather than by hand.
++echo   DC34        Disk-change/ready pin (34). Shown as ? if your
++echo               Greaseweazle can't read this particular pin back.
++echo.
++echo The tool itself prints a key legend when it starts (step, jump, head,
++echo recalibrate, motor, drive-select, density, quit).
++echo.
++exit /b 1
+diff --git a/gw-diag.sh b/gw-diag.sh
+new file mode 100755
+index 0000000..7dca0fd
+--- /dev/null
++++ b/gw-diag.sh
+@@ -0,0 +1,226 @@
++#!/usr/bin/env bash
++#
++# POSIX counterpart of gw-diag.bat: run the gw diag tool straight from the
++# source tree this script lives in, with no build or install step.
++
++set -u
++
++# This script lives in the root of the greaseweazle fork and runs the gw diag
++# tool straight from the source tree next to it.
++ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
++
++# Always show which commit this copy is at, first thing, before anything else
++# can go wrong or print help and exit -- so a copied/synced tree never leaves
++# you guessing which version you're actually running.
++if command -v git >/dev/null 2>&1; then
++    banner=$(git -C "$ROOT" log -1 --format='%h %ci %s' 2>/dev/null)
++    if [ -n "$banner" ]; then
++        echo "gw-diag: $banner"
++    else
++        echo "gw-diag: (not a git checkout -- can't identify commit)"
++    fi
++else
++    echo "gw-diag: (git not on PATH -- can't identify commit)"
++fi
++
++usage() {
++    cat <<'EOF'
++
++gw-diag.sh - run the gw diag tool straight from source, no build or install
++             needed. Handy on machines without a C compiler set up, since a
++             full pip install builds an optional speed-up extension. Just
++             clone the fork and run this file.
++
++Needs Python 3.8 or newer. The required Python packages (crcmod,
++bitarray>=3, pyserial, requests) are installed automatically on first run,
++into a virtual environment beside this script if your distribution manages
++its system Python.
++
++USAGE:
++  ./gw-diag.sh --rate KBPS [other options]
++
++PARAMETERS:
++  --device NAME    Serial port name, such as /dev/ttyACM0. Optional, only
++                    needed if the Greaseweazle isn't auto-detected or you
++                    have more than one plugged in.
++  --drive ID       Which physical drive to use. A or B for an IBM/PC
++                    cable, 0-3 for a Shugart cable. Default: A.
++  --cyls N         Number of cylinders the drive has. Default: 84. You
++                    can still step past this to probe a drive's real
++                    mechanical limit. It's just the default range.
++  --heads N        Number of heads/sides: 1 or 2. Default: 2.
++  --double-step    Step two physical cylinders per logical track, for
++                    an 80-track drive reading a 40-track disk.
++  --step-delay N   Step Delay in microseconds for this session only
++                    (same units as "gw delays --step"). Optional --
++                    without it, diag preserves whatever "gw delays"
++                    already has set, instead of reverting to the
++                    firmware default the way it used to.
++  --encoding TYPE  mfm or fm. Default: mfm. Almost everything from the
++                    PC, Amiga and Atari ST era is mfm. Old 8-inch or
++                    single-density disks are fm.
++  --rate KBPS      Data rate in kilobits per second. Required. Common
++                    values: 250 for double density, 500 for high
++                    density. Rate alone doesn't fully determine the
++                    format (500kbps is both 1.2MB 5.25" HD and 1.44MB
++                    3.5" HD, at different rpm), so this is the one
++                    value you must always supply yourself.
++  --secs N         Sectors expected per track. Optional: left out, the
++                    tool guesses it from --rate and the measured rpm
++                    for standard formats. Set it yourself for a
++                    nonstandard or copy-protected disk.
++  --rpm N          Force a fixed spindle speed instead of using the
++                    live measurement. Optional, normally leave this
++                    out.
++  --gen-tg43       Auto-drive pin 2 as a TG43 signal for 8-inch
++                    drives: high below track 60, low from track 60
++                    up (matches --gen-tg43 in gw read/write/align).
++                    Updated automatically on every seek. Disables
++                    the d key while active, since pin 2 is then
++                    under automatic control, not manual toggle.
++
++OUTPUT LINE FORMAT:
++  Drive A: T0, H0, RPM 297.53, S9/9, OT NO, SEL:ON, MOT:ON,
++  WP:H Unprot, TK0:L ON, DEN 2:L, DC34:?
++
++  Drive       Drive ID you selected.
++  T           Current track/cylinder number.
++  H           Current head/side.
++  RPM         Measured spindle speed this update. Green if within 5rpm
++              of a standard speed (300 or 360), red otherwise, only
++              once there's an actual reading. Shows ERR if no disk or
++              index signal was found, or "off" if you turned the
++              motor off with the m key.
++  S           Sectors read cleanly from the current track, out of how
++              many were expected (from --secs, or the guess).
++  OT          Off-track sectors: sectors that decoded fine but whose
++              header said a different track than where the head
++              actually is. Shows NO if there aren't any. Otherwise
++              shows which track(s) they actually came from, as
++              T<cyl>/S<count>, for example T11/S2 means 2 sectors read
++              cleanly but tagged as track 11 while the head is on a
++              different track. More than one wrong track in the same
++              read shows as a comma list, such as T11/S2,T12/S1. Any
++              non-NO value usually means the head is mistracking or
++              stepping to the wrong place.
++  SEL         Drive-select line: ON while selected, OFF after the s
++              key deselects it. Independent of MOT -- some drives
++              gate their head load/unload solenoid off drive-select
++              rather than motor-on, so this lets you test that
++              without also stopping the spindle.
++  MOT         Motor-on line: ON while the motor is running, OFF
++              after the m key turns it off.
++  WP          Write-protect pin (28), shown as the raw H/L level plus
++              whether that means Prot or Unprot on this drive.
++  TK0         Track-0 sensor pin (26): raw H/L level plus ON when the
++              head is at track 0 (L), OFF otherwise (H).
++  DEN 2       Density-select output pin (2) and the level you've set
++              it to with the d key. Note: pin 2 isn't always density
++              select. On 8-inch drives, and on most 34-to-50-pin
++              adapter cables, the same pin is commonly wired as TG43
++              instead (write precompensation enable past a given
++              cylinder). The d key just toggles the raw pin either
++              way. Use --gen-tg43 instead if you want it driven
++              automatically by cylinder rather than by hand.
++  DC34        Disk-change/ready pin (34). Shown as ? if your
++              Greaseweazle can't read this particular pin back.
++
++The tool itself prints a key legend when it starts (step, jump, head,
++recalibrate, motor, drive-select, density, quit).
++
++If the Greaseweazle is found but can't be opened (a permission error on
++/dev/tty*), install the udev rules shipped with this repo, from the folder
++this script is in:
++  sudo cp scripts/49-greaseweazle.rules /etc/udev/rules.d/
++then unplug and reconnect the device.
++
++EOF
++    exit 1
++}
++
++case "${1-}" in
++    ''|-h|--help|-\?) usage ;;
++esac
++
++if [ ! -f "$ROOT/scripts/win/gw.py" ]; then
++    echo "ERROR: gw-diag.sh must sit in the root of the greaseweazle fork," >&2
++    echo "next to the scripts/ and src/ folders. \"$ROOT/scripts/win/gw.py\"" >&2
++    echo "was not found." >&2
++    exit 1
++fi
++
++# Pick an interpreter: python3 by preference, python only if it is really 3.x.
++PY=""
++for candidate in python3 python; do
++    if command -v "$candidate" >/dev/null 2>&1 &&
++       "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' \
++           >/dev/null 2>&1; then
++        PY=$(command -v "$candidate")
++        break
++    fi
++done
++
++if [ -z "$PY" ]; then
++    echo "ERROR: Python 3.8 or newer was not found on your PATH." >&2
++    echo >&2
++    if [ "$(uname -s)" = "Darwin" ]; then
++        echo "Install it with Homebrew <https://brew.sh>:" >&2
++        echo "  brew install python3" >&2
++    else
++        echo "Install it with your package manager, for example:" >&2
++        echo "  sudo apt install python3 python3-pip python3-venv   # Debian/Ubuntu" >&2
++        echo "  sudo dnf install python3 python3-pip                # Fedora" >&2
++        echo "  sudo pacman -S python python-pip                    # Arch" >&2
++    fi
++    exit 1
++fi
++
++DEPS='import crcmod, bitarray, serial, requests'
++VENV="$ROOT/.venv"
++
++# Prefer a virtual environment we made earlier over the system interpreter:
++# once the packages live there, that is where they stay.
++if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c "$DEPS" >/dev/null 2>&1; then
++    PY="$VENV/bin/python"
++elif ! "$PY" -c "$DEPS" >/dev/null 2>&1; then
++    echo "First-time setup: installing the required Python packages"
++    echo "(crcmod, bitarray, pyserial, requests)..."
++    echo
++    # Most current distributions mark the system Python "externally managed"
++    # (PEP 668) and refuse a plain pip install into it, so go straight to a
++    # virtual environment beside this script. It keeps the packages out of
++    # the system site-packages, needs no root, and is easy to delete: it is
++    # just the .venv folder here.
++    if ! "$PY" -m venv "$VENV" >/dev/null 2>&1; then
++        echo "ERROR: could not create a virtual environment at $VENV." >&2
++        echo >&2
++        echo "On Debian/Ubuntu the venv module is a separate package:" >&2
++        echo "  sudo apt install python3-venv" >&2
++        exit 1
++    fi
++    if ! "$VENV/bin/python" -m pip install --quiet --upgrade pip >/dev/null 2>&1; then
++        : # a pip too old to upgrade itself is usually still good enough
++    fi
++    if ! "$VENV/bin/python" -m pip install --quiet \
++            crcmod 'bitarray>=3' pyserial requests; then
++        echo >&2
++        echo "ERROR: automatic install failed. Install the packages by hand with:" >&2
++        echo "  $VENV/bin/python -m pip install crcmod 'bitarray>=3' pyserial requests" >&2
++        exit 1
++    fi
++    PY="$VENV/bin/python"
++    echo
++fi
++
++# src/greaseweazle/__init__.py is gitignored and only gets written by a real
++# build/version step. "make mypy" overwrites it with a type-stub-only line
++# that breaks "from greaseweazle import __version__" at runtime, so always
++# rewrite a working one here before running. No "+" in the string -- cli.py
++# prints a "TEST/PRE-RELEASE" banner whenever one is present.
++echo "__version__ = '0.1.dev0local'" > "$ROOT/src/greaseweazle/__init__.py"
++
++export PYTHONPATH="$ROOT/src"
++export GW_OPT=n
++
++cd "$ROOT" || exit 1
++exec "$PY" scripts/win/gw.py diag "$@"
+diff --git a/screenshots/gw-diag.png b/screenshots/gw-diag.png
+new file mode 100644
+index 0000000..4a34047
+Binary files /dev/null and b/screenshots/gw-diag.png differ
+diff --git a/src/greaseweazle/cli.py b/src/greaseweazle/cli.py
+index 3085c81..182c307 100644
+--- a/src/greaseweazle/cli.py
++++ b/src/greaseweazle/cli.py
+@@ -19,6 +19,7 @@ actions = [ 'info',
+             'erase',
+             'clean',
+             'seek',
++            'diag',
+             'delays',
+             'update',
+             'pin',
+diff --git a/src/greaseweazle/tools/diag/__init__.py b/src/greaseweazle/tools/diag/__init__.py
+new file mode 100644
+index 0000000..b76632b
+--- /dev/null
++++ b/src/greaseweazle/tools/diag/__init__.py
+@@ -0,0 +1,452 @@
++# greaseweazle/tools/diag/__init__.py
++#
++# Greaseweazle control script: Interactive live disk/drive diagnostic.
++#
++# Based on the work of Keir Fraser
++#
++# This is free and unencumbered software released into the public domain.
++# See the file COPYING for more details, or visit <http://unlicense.org>.
++
++description = "Interactive live disk/drive diagnostic."
++
++import os, sys, time
++from typing import List, Optional, Tuple
++
++from greaseweazle import error
++from greaseweazle import usb as USB
++# See decode.py for why codec.codec must be imported before ibm.ibm.
++from greaseweazle.codec import codec  # noqa: F401
++from greaseweazle.codec.ibm.ibm import Mode
++from greaseweazle.tools import util
++from greaseweazle.tools.delays import Delays
++from greaseweazle.tools.diag import pinmap, decode, keyboard
++
++# ANSI color for the live sector count: bright green on a complete read,
++# bright red otherwise. Windows 10+ consoles support these once virtual-
++# terminal processing is enabled (see enable_vt_colors); POSIX terminals
++# handle them natively.
++_GREEN = '\x1b[92m'
++_RED = '\x1b[91m'
++_RESET = '\x1b[0m'
++
++
++def enable_vt_colors() -> None:
++    """Turn on ANSI escape handling in the Windows console (no-op if it
++    isn't a real console, such as output redirected to a file)."""
++    if os.name != 'nt':
++        return
++    try:
++        import ctypes
++        kernel32 = ctypes.windll.kernel32
++        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
++        mode = ctypes.c_uint32()
++        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
++            return
++        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
++        kernel32.SetConsoleMode(handle, mode.value | 0x0004)
++    except Exception:
++        pass  # colors are cosmetic -- never fail the session over them
++
++KEYLEGEND = """\
++Keys: 0-9=goto track N0  +/-/<-/->=step 1  r=recalibrate
++      h=head  m=motor  s=drive-select  d=density-select  q/Esc=quit"""
++
++# (rate_kbps, nominal_rpm) -> (sectors/track, description). Sector count
++# depends on rate *and* rpm together -- for example 500kbps is 15 sec/trk at
++# 360rpm (1.2MB 5.25" HD) but 18 sec/trk at 300rpm (1.44MB 3.5" HD) -- so
++# rate alone can't disambiguate it. Used both for the startup cheat sheet
++# and to guess --secs when the user doesn't supply it.
++STANDARD_FORMATS = {
++    (250, 300): (9, '360KB 5.25" DD / 720KB 3.5" DD'),
++    # 300kbps is the odd one: a 1.2MB 5.25" HD drive spins at 360rpm, so
++    # reading a 300rpm-written DD disk in it scales the data rate up by
++    # 360/300 = 1.2 (250 -> 300kbps) while the content stays 9 sec/trk.
++    (300, 360): (9, 'DD disk in 1.2MB 5.25" HD drive @ 360rpm'),
++    (500, 360): (15, '1.2MB 5.25" HD'),
++    (500, 300): (18, '1.44MB 3.5" HD'),
++    (1000, 300): (36, '2.88MB 3.5" ED'),
++}
++
++
++def cheatsheet() -> str:
++    lines = ['Typical formats (rate @ rpm = sec/trk):']
++    for (rate, rpm), (secs, desc) in sorted(STANDARD_FORMATS.items()):
++        lines.append('  %5d kbps @ %3d rpm = %2d sec/trk  (%s)' %
++                     (rate, rpm, secs, desc))
++    return '\n'.join(lines)
++
++
++def guess_secs(rate: int, rpm: Optional[float]) -> Optional[int]:
++    if rpm is None:
++        return None
++    nominal_rpm = 360 if rpm >= 330 else 300
++    entry = STANDARD_FORMATS.get((rate, nominal_rpm))
++    return entry[0] if entry else None
++
++
++class State:
++    def __init__(self, args, delays: Delays) -> None:
++        self.args = args
++        self.delays = delays
++        self.cyl = 0
++        self.head = 0
++        self.motor = True
++        self.selected = True  # util.with_drive_selected() selects before run()
++        self.density = False
++        self.last_rpm: Optional[float] = None  # self-corrects the read window
++        self.err_streak = 0  # consecutive ticks with no index (for recovery)
++
++
++def sync_density_pin(usb: USB.Unit, st: State) -> None:
++    # Pin 2 is an output we drive ourselves -- there's no hardware
++    # read-back for it (see pinmap.py), so we can't just trust that
++    # whatever level the firmware defaults to after a reset matches
++    # st.density. Force a real transition (away, then back) so the GW is
++    # actually driving the level the status line claims, rather than a
++    # same-value set_pin() silently being a no-op against a stale register.
++    usb.set_pin(pinmap.DENSITY_SELECT_PIN, not st.density)
++    usb.set_pin(pinmap.DENSITY_SELECT_PIN, st.density)
++
++
++def try_seek(usb: USB.Unit, st: State, new_cyl: int) -> None:
++    # No upper clamp -- the user can deliberately probe past the declared
++    # --cyls (for example to find a drive's real mechanical limit). usb.seek()
++    # itself rejects nonsense values, and a too-far seek on real hardware
++    # surfaces as a CmdError/Fatal we catch below rather than a crash.
++    new_cyl = max(0, new_cyl)
++    # Double-step: an 80-track drive reading a 40-track disk moves two
++    # physical cylinders per logical track. st.cyl stays *logical* (that's
++    # what the sector IDAMs and the decoder compare against). Only the
++    # physical seek target is doubled.
++    phys_cyl = new_cyl * 2 if st.args.double_step else new_cyl
++    try:
++        usb.seek(phys_cyl, st.head)
++        st.cyl = new_cyl
++    except (error.Fatal, USB.CmdError) as e:
++        print(str(e))
++        return
++    if st.args.gen_tg43:
++        st.density = st.cyl < pinmap.TG43_TRACK_THRESHOLD
++        usb.set_pin(pinmap.DENSITY_SELECT_PIN, st.density)
++
++
++# Cap on recalibration steps -- more cylinders than any real drive has, so
++# a genuinely stuck head or dead TK0 sensor is reported instead of looping
++# forever.
++MAX_RECAL_STEPS = 80
++
++
++def recalibrate(usb: USB.Unit, st: State) -> None:
++    print('Recalibrating to track 0')
++    prior = st.cyl
++
++    # A previous failed/aborted seek can leave the firmware's internal
++    # cylinder counter out of sync with the real head position, so a plain
++    # seek(0) computes a zero (or wrong) step delta and never physically
++    # moves the head -- this is exactly the state "gw reset" has always
++    # been observed to clear. power_on_reset() (Cmd.Reset) wipes that
++    # internal state, so redo the per-session setup it also resets.
++    try:
++        usb.power_on_reset()
++        st.delays.update()  # power_on_reset() wipes step/settle/etc back to
++                            # firmware defaults -- restore the session's delays
++        usb.set_bus_type(st.args.drive.bus.value)
++        # Respect a manual 's' deselect -- don't silently re-select just
++        # because the reset forces the bus type to be reasserted.
++        if st.selected:
++            usb.drive_select(st.args.drive.unit_id)
++        else:
++            usb.drive_deselect()
++        usb.drive_motor(st.args.drive.unit_id, st.motor)
++        sync_density_pin(usb, st)
++    except USB.CmdError as e:
++        print('Recalibration reset failed: %s' % e)
++        return
++
++    for cyl in range(0, -MAX_RECAL_STEPS, -1):
++        # Negative cylinders bypass usb.seek()'s own TRK0 check (it only
++        # validates when target==0), so this always "succeeds" while still
++        # physically stepping the head one track further each time -- a
++        # fallback in case the reset alone doesn't fully re-home the head.
++        try:
++            usb.seek(cyl, st.head)
++        except (error.Fatal, USB.CmdError):
++            pass
++        try:
++            trk0 = not usb.get_pin(pinmap.TK0_PIN)
++        except USB.CmdError:
++            trk0 = False
++        if trk0:
++            st.cyl = 0
++            try_seek(usb, st, prior)
++            return
++    print('Track 0 signal never asserted after %d steps -- '
++          'bad TK0 sensor or heads stuck?' % MAX_RECAL_STEPS)
++    # prior is very likely 0 here (that's the common way this loop gets
++    # triggered) -- don't re-run the same failing seek(0) and dump the raw
++    # firmware error a second time right after our own diagnostic.
++    if prior != 0:
++        try_seek(usb, st, prior)
++
++
++def handle_key(usb: USB.Unit, st: State, key: Optional[str]) -> bool:
++    """Returns False to request quit."""
++
++    if key in ('q', 'esc'):
++        return False
++    elif key in ('left', ',', '-'):
++        try_seek(usb, st, st.cyl - 1)
++    elif key in ('right', '.', '+'):
++        try_seek(usb, st, st.cyl + 1)
++    elif key is not None and key.isdigit():
++        try_seek(usb, st, int(key) * 10)
++    elif key == 'h':
++        if st.args.heads == 2:
++            st.head = 1 - st.head
++            # usb.seek() is what actually emits the head-select command. Just
++            # flipping st.head leaves the device reading the *old* head until
++            # the next physical step. Re-seek the current cylinder so the new
++            # head takes effect immediately (no movement, same cyl).
++            try_seek(usb, st, st.cyl)
++    elif key == 'r':
++        recalibrate(usb, st)
++    elif key == 'm':
++        st.motor = not st.motor
++        usb.drive_motor(st.args.drive.unit_id, st.motor)
++    elif key == 's':
++        # Deliberately independent of the motor: some drives gate their
++        # head load/unload solenoid off drive-select rather than motor-on,
++        # so this lets that be tested on its own, with the motor left
++        # running (or not) either way.
++        st.selected = not st.selected
++        if st.selected:
++            usb.drive_select(st.args.drive.unit_id)
++        else:
++            usb.drive_deselect()
++    elif key == 'd':
++        if not st.args.gen_tg43:  # pin 2 is auto-tracked, 'd' is a no-op
++            st.density = not st.density
++            usb.set_pin(pinmap.DENSITY_SELECT_PIN, st.density)
++    return True
++
++
++def drive_label(drive: util.Drive) -> str:
++    if drive.bus == USB.BusType.IBMPC:
++        return 'B' if drive.unit_id == 1 else 'A'
++    return str(drive.unit_id)
++
++
++def status_line(usb: USB.Unit, st: State) -> str:
++
++    args = st.args
++
++    sigs = {}
++    pin_of = {label: pin for label, pin, _ in pinmap.SIGNALS}
++    wp_level: Optional[bool] = None
++    tk0_level: Optional[bool] = None
++    for label, pin, ambiguous in pinmap.SIGNALS:
++        try:
++            level = usb.get_pin(pin)
++        except USB.CmdError:
++            sigs[label] = '?'
++            continue
++        sigs[label] = ('H' if level else 'L') + ('?' if ambiguous else '')
++        if label == 'WP':
++            wp_level = level
++        elif label == 'TK0':
++            tk0_level = level
++
++    wp_str = sigs['WP']
++    if wp_level is not None:
++        # This interface is active-low: WP asserted (L) == write-protected.
++        wp_str += ' Unprot' if wp_level else ' Prot'
++
++    tk0_str = sigs['TK0']
++    if tk0_level is not None:
++        # Active-low: TK0 asserted (L) == head is at track 0.
++        tk0_str += ' OFF' if tk0_level else ' ON'
++
++    rpm_str, rpm_val, sect = 'off', None, 0
++    off_track: List[Tuple[int, int]] = []
++    if st.motor:
++        # Bound the capture by *time*, not by index pulses: with no disk
++        # inserted there is never an index pulse, so usb.read_track(revs=N)
++        # would block waiting for one that will never come. Sizing the
++        # window from the last known RPM (falling back to --rpm, then a
++        # generic guess) keeps it self-correcting once a real disk is in.
++        assumed_rpm = args.rpm or st.last_rpm or 250.0
++        # Cap the assumed speed at 400rpm so the window is always at least
++        # 2 revs of the slowest standard drive. A stale/high last_rpm must
++        # never size the window below one real revolution, or the read can
++        # never catch a second index pulse to recover from.
++        assumed_rpm = min(assumed_rpm, 400.0)
++        ticks = int(usb.sample_freq * (60 / assumed_rpm) * 2.0)
++        try:
++            flux = usb.read_track(revs=0, ticks=ticks)
++            # Need two index pulses for a genuine index-to-index period.
++            # index_list[-1] with only one index is the partial capture-
++            # start-to-index time, which reads as a spuriously high RPM.
++            # Storing that in last_rpm shrinks the next window into a
++            # spiral the read never climbs back out of (this is what makes
++            # RPM sometimes never come back after a disk is pulled and
++            # reinserted). Fewer than two indexes means no reading.
++            if len(flux.index_list) >= 2:
++                tpr = flux.index_list[-1] / flux.sample_freq
++                rpm_val = 60 / tpr
++                rpm_str = '%.2f' % rpm_val
++                st.last_rpm = rpm_val
++                time_per_rev = (60 / args.rpm) if args.rpm else tpr
++                mode = Mode.MFM if args.encoding == 'mfm' else Mode.FM
++                sect, off_track = decode.decode_tick(
++                    flux, st.cyl, st.head, mode, args.rate, time_per_rev)
++            else:
++                rpm_str = 'ERR'
++        except USB.CmdError:
++            rpm_str = 'ERR'
++        except Exception:
++            # No disk / no index found, or garbage flux -- never let this
++            # kill the session, just report nothing decoded this tick.
++            rpm_str = 'ERR'
++            sect, off_track = 0, []
++
++        if rpm_val is not None:
++            st.err_streak = 0
++        elif st.selected:
++            # No index this tick while we are selected and meant to be
++            # spinning. A brief run of these is just an empty or spinning-up
++            # drive, but a sustained run can also mean the device stopped
++            # reporting the index until re-poked (not simply an absent disk),
++            # which is why RPM sometimes stays ERR after a disk is pulled and
++            # reinserted. Every few ticks, re-assert select/motor and re-seek
++            # the current cylinder to kick it, without spamming a command
++            # every tick.
++            st.err_streak += 1
++            if st.err_streak % 4 == 0:
++                try:
++                    usb.drive_select(args.drive.unit_id)
++                    usb.drive_motor(args.drive.unit_id, True)
++                    try_seek(usb, st, st.cyl)
++                except Exception:
++                    pass
++
++    ot_str = ('NO' if not off_track else
++             ','.join('T%d/S%d' % (c, n) for c, n in off_track))
++
++    secs = args.secs if args.secs is not None else guess_secs(args.rate, rpm_val)
++    secs_str = str(secs) if secs is not None else '?'
++
++    # Color the sector field: bright green on a complete read (every
++    # expected sector decoded), bright red on anything short of that. Only
++    # when the motor is spinning and we actually know the expected count --
++    # a guessed/unknown '?' or a stopped motor leaves it uncolored.
++    sect_field = 'S%d/%s' % (sect, secs_str)
++    if st.motor and secs is not None:
++        color = _GREEN if sect == secs else _RED
++        sect_field = '%s%s%s' % (color, sect_field, _RESET)
++
++    # Color RPM green within +-5 of either standard spindle speed (300rpm
++    # for 5.25"/8", 360rpm for 1.2MB HD), red otherwise. Left uncolored
++    # when there's no reading at all ('off'/'ERR').
++    rpm_field = rpm_str
++    if rpm_val is not None:
++        in_range = 295 <= rpm_val <= 305 or 355 <= rpm_val <= 365
++        rpm_field = '%s%s%s' % (_GREEN if in_range else _RED, rpm_str, _RESET)
++
++    return ('Drive %s: T%d, H%d, RPM %s, %s, OT %s, SEL:%s, MOT:%s, '
++            'WP:%s, TK0:%s, DEN %d:%s, DC%d:%s' %
++            (drive_label(args.drive), st.cyl, st.head, rpm_field, sect_field,
++             ot_str, 'ON' if st.selected else 'OFF',
++             'ON' if st.motor else 'OFF', wp_str, tk0_str,
++             pinmap.DENSITY_SELECT_PIN, 'H' if st.density else 'L',
++             pin_of['DC'], sigs['DC']))
++
++
++def run(usb: USB.Unit, args, delays: Delays) -> None:
++
++    enable_vt_colors()
++    st = State(args, delays)
++    print(cheatsheet())
++    print(KEYLEGEND)
++    if args.gen_tg43:
++        print('TG43 auto-tracking enabled on pin 2 (threshold T%d). '
++              'The d key is disabled' % pinmap.TG43_TRACK_THRESHOLD)
++
++    # Take the keyboard before touching the drive, so a terminal that can't
++    # provide key input fails immediately rather than after a recalibrate.
++    # The context manager restores the terminal on every exit path, including
++    # Ctrl-C and an unexpected error.
++    with keyboard.Keyboard() as kb:
++        sync_density_pin(usb, st)  # make sure GW really drives what we assume
++        recalibrate(usb, st)  # known starting position for the session
++
++        next_tick = time.monotonic()
++        while True:
++            if kb.kbhit():
++                key = kb.read_key()
++                if key is not None and not handle_key(usb, st, key):
++                    break
++
++            now = time.monotonic()
++            if now >= next_tick:
++                print(status_line(usb, st))
++                next_tick = now + 0.5
++            else:
++                time.sleep(0.02)
++
++
++def main(argv) -> None:
++
++    epilog = (util.drive_desc)
++    parser = util.ArgumentParser(usage='%(prog)s [options]', epilog=epilog)
++    parser.add_argument("--device", help="greaseweazle device name")
++    parser.add_argument("--drive", type=util.Drive(), default='A',
++                        help="drive to diagnose")
++    parser.add_argument("--cyls", type=util.min_int(1), default=84,
++                        metavar="N", help="number of cylinders")
++    parser.add_argument("--heads", type=int, choices=[1, 2], default=2,
++                        help="number of heads")
++    parser.add_argument("--double-step", action="store_true",
++                        help="step two physical cylinders per track, for an "
++                        "80-track drive reading a 40-track disk")
++    parser.add_argument("--step-delay", type=util.uint, metavar="N",
++                        help="Step Delay (usecs) for this session, as "
++                        "'gw delays --step' (overrides the persisted "
++                        "setting. Otherwise it is preserved across diag's "
++                        "internal resets rather than reverting to the "
++                        "firmware default)")
++    parser.add_argument("--encoding", choices=['mfm', 'fm'], default='mfm',
++                        help="track encoding")
++    parser.add_argument("--rate", type=util.min_int(1), required=True,
++                        metavar="KBPS", help="data rate, in kbps")
++    parser.add_argument("--secs", type=util.min_int(1), default=None,
++                        metavar="N", help="expected sectors per track "
++                        "(omit to guess from rate/rpm for standard formats)")
++    parser.add_argument("--rpm", type=float, default=None,
++                        help="fixed spindle speed, in rpm "
++                        "(omit to track the live measurement)")
++    parser.add_argument("--gen-tg43", action="store_true",
++                        help="auto-drive pin 2 as a TG43 signal for "
++                        "8-inch drives (low from T%d up, high below), "
++                        "matching --gen-tg43 in read/write/align. "
++                        "Disables the d key, since pin 2 is then "
++                        "under automatic control" % pinmap.TG43_TRACK_THRESHOLD)
++    parser.description = description
++    parser.prog += ' ' + argv[1]
++    args = parser.parse_args(argv[2:])
++
++    try:
++        usb = util.usb_open(args.device)
++        delays = Delays(usb)  # capture the persisted "gw delays" settings
++        if args.step_delay is not None:
++            delays.step = args.step_delay
++        usb.power_on_reset()
++        delays.update()  # power_on_reset() wiped them -- restore/apply now
++        util.with_drive_selected(lambda: run(usb, args, delays), usb,
++                                 args.drive)
++    except USB.CmdError as err:
++        print("Command Failed: %s" % err)
++
++
++# Local variables:
++# python-indent: 4
++# End:
+diff --git a/src/greaseweazle/tools/diag/decode.py b/src/greaseweazle/tools/diag/decode.py
+new file mode 100644
+index 0000000..eb486ce
+--- /dev/null
++++ b/src/greaseweazle/tools/diag/decode.py
+@@ -0,0 +1,53 @@
++# greaseweazle/tools/diag/decode.py
++#
++# Per-tick flux decode for the interactive diagnostic: counts sectors whose
++# IDAM cylinder matches the head's current (expected) cylinder versus
++# sectors that decoded cleanly but came from a different cylinder.
++#
++# Based on the work of Keir Fraser
++#
++# This is free and unencumbered software released into the public domain.
++# See the file COPYING for more details, or visit <http://unlicense.org>.
++
++from collections import Counter
++from typing import List, Tuple
++
++# Importing codec.codec first forces its module-level imports (which load
++# ibm.py in full) to run before we touch ibm.py directly -- ibm.py and
++# codec.hp.hp_mmfm import each other, so a direct `from ...ibm import ...`
++# as the first touch of this package raises a partial-init ImportError.
++from greaseweazle.codec import codec  # noqa: F401
++from greaseweazle.codec.ibm.ibm import IBMTrack, Mode
++from greaseweazle.flux import Flux
++
++
++def decode_tick(
++        flux: Flux,
++        cyl: int,
++        head: int,
++        mode: Mode,
++        rate_kbps: int,
++        time_per_rev: float
++) -> Tuple[int, List[Tuple[int, int]]]:
++    """Decode one tick's flux capture.
++
++    Returns (sect, off_track): sect = cleanly-decoded sectors whose IDAM
++    cylinder matches `cyl`. off_track = a list of (cyl, count) pairs, one
++    per distinct cylinder actually found among the cleanly-decoded sectors
++    that don't match `cyl` (head mistracking). Empty if none.
++
++    A fresh IBMTrack is built every call: IBMTrack.decode_raw() appends to
++    self.sectors across calls without ever clearing it, so reusing one
++    instance across ticks would accumulate stale sectors from earlier
++    reads/cylinders.
++    """
++    t = IBMTrack(cyl, head, mode)
++    t.clock = 5e-4 / rate_kbps
++    t.time_per_rev = time_per_rev
++    t.decode_flux(flux)
++
++    sect = sum(1 for s in t.sectors if s.crc == 0 and s.idam.c == cyl)
++    wrong_cyls = Counter(s.idam.c for s in t.sectors
++                         if s.crc == 0 and s.idam.c != cyl)
++    off_track = sorted(wrong_cyls.items())
++    return sect, off_track
+diff --git a/src/greaseweazle/tools/diag/keyboard.py b/src/greaseweazle/tools/diag/keyboard.py
+new file mode 100644
+index 0000000..573f8da
+--- /dev/null
++++ b/src/greaseweazle/tools/diag/keyboard.py
+@@ -0,0 +1,191 @@
++# greaseweazle/tools/diag/keyboard.py
++#
++# Unbuffered, non-echoing keyboard input for the interactive diagnostic,
++# on both Windows and POSIX (Linux/macOS).
++#
++# Based on the work of Keir Fraser
++#
++# This is free and unencumbered software released into the public domain.
++# See the file COPYING for more details, or visit <http://unlicense.org>.
++
++import sys
++from typing import Any, List, Optional
++
++from greaseweazle import error
++
++# Key names produced by read_key(): 'up', 'down', 'left', 'right', 'enter',
++# 'esc', 'backspace'. Anything else is the literal character typed, as a
++# one-character string. None means a key we have no name for.
++
++# The platform split is written as `sys.platform == 'win32'` rather than the
++# `os.name == 'nt'` used elsewhere in the tree because that is the form mypy
++# narrows on: it type-checks only the branch matching the platform it runs on
++# and treats the other as unreachable. Without that, checking on Linux trips
++# over msvcrt (whose typeshed stub is empty off Windows) and checking on
++# Windows trips over termios.
++
++if sys.platform == 'win32':
++
++    import msvcrt
++
++    # Windows reports arrow keys as two bytes: a 0x00/0xe0 lead-in followed
++    # by a scan code.
++    _ARROWS = {b'H': 'up', b'P': 'down', b'K': 'left', b'M': 'right'}
++
++    class _Impl:
++
++        def open(self) -> None:
++            pass
++
++        def close(self) -> None:
++            pass
++
++        def kbhit(self) -> bool:
++            return bool(msvcrt.kbhit())
++
++        def read_key(self) -> Optional[str]:
++            ch = msvcrt.getch()
++            if ch in (b'\x00', b'\xe0'):
++                return _ARROWS.get(msvcrt.getch())
++            if ch in (b'\r', b'\n'):
++                return 'enter'
++            if ch == b'\x1b':
++                return 'esc'
++            if ch == b'\x08':
++                return 'backspace'
++            try:
++                return ch.decode('ascii')
++            except UnicodeDecodeError:
++                return None
++
++else:
++
++    import os, select, termios, tty
++
++    # POSIX terminals report arrow keys as ANSI escape sequences, with the
++    # final byte selecting the key. Both the normal (CSI, "ESC [") and
++    # application-cursor (SS3, "ESC O") forms are seen in the wild -- some
++    # terminals switch to the latter under a full-screen application, so
++    # accept either.
++    _ARROWS = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left'}
++
++    # How long to wait for the rest of an escape sequence after a bare ESC
++    # byte before deciding the user really did press Escape (which quits).
++    # Sequences arrive in a single burst, so this only has to beat terminal
++    # latency; a human cannot press ESC and '[' within it by hand.
++    _ESC_TIMEOUT = 0.05
++
++    class _Impl:
++        """Puts the terminal in cbreak mode for the life of the session.
++
++        cbreak rather than raw on purpose: it clears ECHO and ICANON (so keys
++        arrive one at a time and aren't echoed into the middle of the status
++        output) while leaving OPOST alone, so ordinary print() newlines still
++        become CRLF and the scrolling status lines stay aligned at column
++        zero. It also leaves ISIG alone on current Python versions, so Ctrl-C
++        still works as an escape hatch alongside q/Esc.
++        """
++
++        def __init__(self) -> None:
++            self.fd = -1
++            self.saved: Optional[List[Any]] = None
++
++        def open(self) -> None:
++            error.check(sys.stdin.isatty(),
++                        'gw diag needs an interactive terminal for keyboard '
++                        'input (stdin is not a tty -- it is redirected or '
++                        'piped)')
++            self.fd = sys.stdin.fileno()
++            self.saved = termios.tcgetattr(self.fd)
++            tty.setcbreak(self.fd)
++
++        def close(self) -> None:
++            # Always restore, even on an exception: leaving the terminal in
++            # cbreak mode hands the user an un-echoed shell afterwards.
++            if self.saved is not None:
++                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
++                self.saved = None
++
++        def kbhit(self) -> bool:
++            return bool(select.select([self.fd], [], [], 0)[0])
++
++        def _getch(self, timeout: Optional[float] = None) -> Optional[str]:
++            """One byte as a str, or None if `timeout` expires first."""
++            if timeout is not None and not select.select(
++                    [self.fd], [], [], timeout)[0]:
++                return None
++            ch = os.read(self.fd, 1)
++            if not ch:
++                return None
++            try:
++                return ch.decode('ascii')
++            except UnicodeDecodeError:
++                return None
++
++        def read_key(self) -> Optional[str]:
++            ch = self._getch()
++            if ch is None:
++                return None
++            if ch in ('\r', '\n'):
++                return 'enter'
++            if ch in ('\x7f', '\x08'):
++                return 'backspace'
++            if ch != '\x1b':
++                return ch
++            return self._read_escape()
++
++        def _read_escape(self) -> Optional[str]:
++            """Decode what follows a lone ESC byte.
++
++            A bare Escape means quit, so only treat it as the start of a
++            sequence if more bytes turn up promptly. Whatever does turn up is
++            consumed to the end of the sequence even when we have no name for
++            that key: an unconsumed tail would otherwise be read as separate
++            keystrokes, and the leftover digits of, say, Page-Up (ESC [ 5 ~)
++            would step the head to track 50.
++            """
++            ch = self._getch(_ESC_TIMEOUT)
++            if ch is None:
++                return 'esc'
++            if ch == 'O':  # SS3: exactly one more byte, e.g. ESC O A = up
++                return _ARROWS.get(self._getch(_ESC_TIMEOUT) or '')
++            if ch != '[':  # Alt-<key> and friends -- not a key we act on
++                return None
++            # CSI: parameter and intermediate bytes, terminated by a final
++            # byte in the range 0x40-0x7e.
++            while True:
++                ch = self._getch(_ESC_TIMEOUT)
++                if ch is None:
++                    return None
++                if '\x40' <= ch <= '\x7e':
++                    return _ARROWS.get(ch)
++
++
++class Keyboard:
++    """Context manager wrapping the platform key reader.
++
++    Use as `with Keyboard() as kb:`, then poll kb.kbhit() and kb.read_key().
++    """
++
++    def __init__(self) -> None:
++        self.impl = _Impl()
++
++    def __enter__(self) -> 'Keyboard':
++        self.impl.open()
++        return self
++
++    def __exit__(self, *exc: Any) -> None:
++        self.impl.close()
++
++    def kbhit(self) -> bool:
++        """True if a keystroke is waiting to be read."""
++        return self.impl.kbhit()
++
++    def read_key(self) -> Optional[str]:
++        """The pending keystroke, or None for a key we don't name."""
++        return self.impl.read_key()
++
++
++# Local variables:
++# python-indent: 4
++# End:
+diff --git a/src/greaseweazle/tools/diag/pinmap.py b/src/greaseweazle/tools/diag/pinmap.py
+new file mode 100644
+index 0000000..c2ab6cb
+--- /dev/null
++++ b/src/greaseweazle/tools/diag/pinmap.py
+@@ -0,0 +1,44 @@
++# greaseweazle/tools/diag/pinmap.py
++#
++# 34-pin floppy interface signals displayed by the interactive diagnostic.
++#
++# Based on the work of Keir Fraser
++#
++# This is free and unencumbered software released into the public domain.
++# See the file COPYING for more details, or visit <http://unlicense.org>.
++
++from typing import List, Tuple
++
++# Density-select is an output we drive ourselves (no read-back pin exists
++# in this firmware), so it's tracked in software rather than polled here.
++#
++# Pin 2 isn't always density-select: on 8-inch drives (and on 34-to-50-pin
++# adapter cables, which almost always carry it through) the same pin is
++# often wired as TG43 instead, asserted past a given cylinder to enable
++# write precompensation. See the existing --gen-tg43 option in tools/read.py,
++# write.py and align.py for the convention this codebase already follows
++# (asserted from track 60 up). The 'd' key here just toggles the raw pin;
++# what that means electrically depends on which signal your cable/drive
++# actually wired to it.
++DENSITY_SELECT_PIN = 2
++
++# Matches the threshold already hardcoded in tools/read.py, write.py and
++# align.py's --gen-tg43 option: pin 2 driven high below this cylinder, low
++# from it upward.
++TG43_TRACK_THRESHOLD = 60
++
++# Input signals polled once per tick, in status-line display order.
++# (label, pin, ambiguous)
++#
++# Pin numbers are the standard Shugart/IBM-PC 34-pin assignments and don't
++# differ between the two cabling conventions for these particular signals.
++# Pin 34's *meaning* does vary by drive family (Disk-Change on IBM/PC,
++# often Ready on Shugart, remapped further on some drives such as Amiga) --
++# hence 'ambiguous': show the raw level, not an asserted semantic.
++TK0_PIN = 26
++
++SIGNALS: List[Tuple[str, int, bool]] = [
++    ('WP',  28, False),
++    ('DC',  34, True),
++    ('TK0', TK0_PIN, False),
++]
